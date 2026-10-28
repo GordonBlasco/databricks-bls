@@ -1,6 +1,6 @@
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
+from pyspark.sql.types import ArrayType, StringType, StructField, StructType
 
 BRONZE_CATALOG = "labor_stats"
 BRONZE_SCHEMA = "bronze"
@@ -15,6 +15,29 @@ VOLUME_ROOT = f"/Volumes/{CATALOG}/{RAW_SCHEMA}/{LANDING_VOLUME}/raw"
 BLS_TIMESERIES = "bls/pr/"
 POPULATION_SOURCE_FILE = "population.json"
 NON_TABULAR_FILES = {"pr.txt", "pr.contacts"}
+
+POPULATION_DATA_SCHEMA = ArrayType(
+    StructType(
+        [
+            StructField("Nation ID", StringType()),
+            StructField("Nation", StringType()),
+            StructField("Year", StringType()),
+            StructField("Population", StringType()),
+        ]
+    )
+)
+POPULATION_COLUMNS = {
+    "Nation ID": "nation_id",
+    "Nation": "nation",
+    "Year": "year",
+    "Population": "population",
+}
+SOURCE_METADATA_COLUMNS = [
+    "_volume_path",
+    "_content_hash",
+    "_file_modified_at",
+    "_ingested_at",
+]
 
 # Bronze intentionally preserves CSV and JSON values as strings. Silver casts
 # fields with stable business meanings while keeping identifiers as strings.
@@ -44,15 +67,31 @@ def apply_silver_types(df):
         target_type = SILVER_COLUMN_TYPES.get(column_name.casefold())
         quoted_name = quote_identifier(column_name)
         if target_type:
+            source_expression = f"trim(cast({quoted_name} AS STRING))"
+            if column_name.casefold() == "population":
+                source_expression = f"try_cast({source_expression} AS DOUBLE)"
             df = df.withColumn(
                 column_name,
-                F.expr(
-                    f"try_cast(trim(cast({quoted_name} AS STRING)) AS {target_type})"
-                ),
+                F.expr(f"try_cast({source_expression} AS {target_type})"),
             )
         elif isinstance(field.dataType, StringType):
             df = df.withColumn(column_name, F.trim(F.col(quoted_name)))
     return df
+
+
+def parse_population_data(df):
+    """Explode the Data USA `data` JSON array into one row per year."""
+    records = df.select(
+        F.explode(F.from_json(F.col("data"), POPULATION_DATA_SCHEMA)).alias("record"),
+        *SOURCE_METADATA_COLUMNS,
+    )
+    return records.select(
+        *[
+            F.col("record").getField(source_name).alias(target_name)
+            for source_name, target_name in POPULATION_COLUMNS.items()
+        ],
+        *SOURCE_METADATA_COLUMNS,
+    )
 
 
 def latest_file_rows(table_name: str):
@@ -94,5 +133,8 @@ for source_file in discover_source_files():
             f"in {BRONZE_CATALOG}.{BRONZE_SCHEMA}.{table_name}."
         ),
     )
-    def build(t=table_name):
-        return apply_silver_types(latest_file_rows(t))
+    def build(t=table_name, sf=source_file):
+        latest = latest_file_rows(t)
+        if sf == POPULATION_SOURCE_FILE:
+            latest = parse_population_data(latest)
+        return apply_silver_types(latest)

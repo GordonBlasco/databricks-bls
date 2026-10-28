@@ -1,6 +1,5 @@
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
-from pyspark.sql.types import ArrayType, StringType, StructField, StructType
 
 CATALOG = "labor_stats"
 RAW_SCHEMA = "raw"
@@ -9,22 +8,6 @@ VOLUME_ROOT = f"/Volumes/{CATALOG}/{RAW_SCHEMA}/{LANDING_VOLUME}/raw"
 BLS_TIMESERIES = "bls/pr/"
 DATAUSA_SOURCE = "datausa"
 POPULATION_SOURCE_FILE = "population.json"
-POPULATION_DATA_SCHEMA = ArrayType(
-    StructType(
-        [
-            StructField("Nation ID", StringType()),
-            StructField("Nation", StringType()),
-            StructField("Year", StringType()),
-            StructField("Population", StringType()),
-        ]
-    )
-)
-POPULATION_COLUMNS = {
-    "Nation ID": "nation_id",
-    "Nation": "nation",
-    "Year": "year",
-    "Population": "population",
-}
 
 BRONZE_CATALOG = "labor_stats"
 BRONZE_SCHEMA = "bronze"
@@ -81,21 +64,8 @@ for source_file in discover_source_files():
             reader = reader.option(key, value)
         raw = reader.load(source_path)
 
-        # Data USA wraps population records in a top-level `data` array.
-        if sf == POPULATION_SOURCE_FILE:
-            raw = raw.select(
-                F.explode(F.from_json("data", POPULATION_DATA_SCHEMA)).alias("record"),
-                F.col("_metadata").alias("_metadata"),
-            ).select(
-                *[
-                    F.col("record").getField(source_name).alias(target_name)
-                    for source_name, target_name in POPULATION_COLUMNS.items()
-                ],
-                "_metadata",
-            )
-
         # BLS pads header names with whitespace ("value   "); data values are left as-is.
-        # All source columns stay strings; trimming and typing happen in silver.
+        # Bronze preserves the raw API/CSV shape; parsing and typing happen in silver.
         data_columns = [column for column in raw.columns if column != "_metadata"]
         return raw.select(
             *[F.col(f"`{c}`").alias(c.strip()) for c in data_columns],

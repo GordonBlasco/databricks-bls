@@ -15,8 +15,8 @@ resources:
   pipelines:
     bls_pipeline:
       name: labor_pipelines
-      catalog: workspace
-      schema: default
+      catalog: labor_stats
+      schema: bronze
       channel: CURRENT
       photon: true
       serverless: true

@@ -43,10 +43,10 @@ POPULATION_URL = (
 )
 
 CATALOG = "labor_stats"
-SCHEMA = "bls"
-VOLUME = "datausa"
-VOLUME_ROOT = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/raw"
-MANIFEST_TABLE = f"{CATALOG}.{SCHEMA}.ingestion_manifest"
+RAW_SCHEMA = "raw"
+LANDING_VOLUME = "landing_zone"
+VOLUME_ROOT = f"/Volumes/{CATALOG}/{RAW_SCHEMA}/{LANDING_VOLUME}/raw"
+MANIFEST_TABLE = f"{CATALOG}.{RAW_SCHEMA}.ingestion_manifest"
 
 
 CONTACT_EMAIL = "gordonblasco@gmail.com"

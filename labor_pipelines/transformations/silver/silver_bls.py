@@ -2,15 +2,15 @@ from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
 BRONZE_CATALOG = "labor_stats"
-BRONZE_SCHEMA = "bls_bronze"
+BRONZE_SCHEMA = "bronze"
 SILVER_CATALOG = "labor_stats"
-SILVER_SCHEMA = "bls_silver"
+SILVER_SCHEMA = "silver"
 
 # Volume paths for source file discovery (must match bronze_bls.py)
 CATALOG = "labor_stats"
-SCHEMA = "bls"
-VOLUME = "datausa"
-VOLUME_ROOT = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/raw"
+RAW_SCHEMA = "raw"
+LANDING_VOLUME = "landing_zone"
+VOLUME_ROOT = f"/Volumes/{CATALOG}/{RAW_SCHEMA}/{LANDING_VOLUME}/raw"
 BLS_TIMESERIES = "bls/pr/"
 NON_TABULAR_FILES = {"pr.txt", "pr.contacts"}
 

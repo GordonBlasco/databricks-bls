@@ -19,6 +19,12 @@ POPULATION_DATA_SCHEMA = ArrayType(
         ]
     )
 )
+POPULATION_COLUMNS = {
+    "Nation ID": "nation_id",
+    "Nation": "nation",
+    "Year": "year",
+    "Population": "population",
+}
 
 BRONZE_CATALOG = "labor_stats"
 BRONZE_SCHEMA = "bronze"
@@ -80,7 +86,13 @@ for source_file in discover_source_files():
             raw = raw.select(
                 F.explode(F.from_json("data", POPULATION_DATA_SCHEMA)).alias("record"),
                 F.col("_metadata").alias("_metadata"),
-            ).select("record.*", "_metadata")
+            ).select(
+                *[
+                    F.col("record").getField(source_name).alias(target_name)
+                    for source_name, target_name in POPULATION_COLUMNS.items()
+                ],
+                "_metadata",
+            )
 
         # BLS pads header names with whitespace ("value   "); data values are left as-is.
         # All source columns stay strings; trimming and typing happen in silver.

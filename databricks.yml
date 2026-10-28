@@ -1,0 +1,48 @@
+# BLS Labor Stats Pipeline - Declarative Automation Bundle
+#
+# Defines the full pipeline as infrastructure-as-code:
+#   1. SDP pipeline (bronze streaming tables + silver materialized views)
+#   2. Lakeflow Job that chains: ingestion notebook -> SDP pipeline update
+#
+# Deploy:    databricks bundle deploy
+# Validate:  databricks bundle validate
+
+bundle:
+  name: bls_labor_stats
+  databricks_cli_version: ">= 0.292.0"
+
+resources:
+  pipelines:
+    bls_pipeline:
+      name: labor_pipelines
+      catalog: workspace
+      schema: default
+      channel: CURRENT
+      photon: true
+      serverless: true
+      development: false
+      continuous: false
+      libraries:
+        - glob:
+            include: ./labor_pipelines/transformations/**
+
+  jobs:
+    bls_ingest_and_process:
+      name: BLS Labor Stats - Ingest and Process
+      tasks:
+        # Task 1: Download raw BLS files into the UC volume
+        - task_key: ingestion
+          notebook_task:
+            notebook_path: ./01_ingestion.py
+
+        # Task 2: Run the SDP pipeline (bronze streaming tables + silver MVs)
+        # Only runs after ingestion completes successfully
+        - task_key: bronze_silver
+          depends_on:
+            - task_key: ingestion
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.bls_pipeline.id}
+
+targets:
+  prod:
+    default: true

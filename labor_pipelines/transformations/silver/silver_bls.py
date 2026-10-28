@@ -1,5 +1,6 @@
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
+from pyspark.sql.types import StringType
 
 BRONZE_CATALOG = "labor_stats"
 BRONZE_SCHEMA = "bronze"
@@ -12,7 +13,46 @@ RAW_SCHEMA = "raw"
 LANDING_VOLUME = "landing_zone"
 VOLUME_ROOT = f"/Volumes/{CATALOG}/{RAW_SCHEMA}/{LANDING_VOLUME}/raw"
 BLS_TIMESERIES = "bls/pr/"
+POPULATION_SOURCE_FILE = "population.json"
 NON_TABULAR_FILES = {"pr.txt", "pr.contacts"}
+
+# Bronze intentionally preserves CSV and JSON values as strings. Silver casts
+# fields with stable business meanings while keeping identifiers as strings.
+SILVER_COLUMN_TYPES = {
+    "year": "INT",
+    "id year": "INT",
+    "begin_year": "INT",
+    "end_year": "INT",
+    "base_year": "INT",
+    "display_level": "INT",
+    "sort_sequence": "INT",
+    "selectable": "BOOLEAN",
+    "value": "DECIMAL(38, 10)",
+    "population": "BIGINT",
+}
+
+
+def quote_identifier(name: str) -> str:
+    """Quote a Spark column name, including names such as 'ID Year'."""
+    return f"`{name.replace('`', '``')}`"
+
+
+def apply_silver_types(df):
+    """Trim strings and apply known types without guessing identifier types."""
+    for field in df.schema.fields:
+        column_name = field.name
+        target_type = SILVER_COLUMN_TYPES.get(column_name.casefold())
+        quoted_name = quote_identifier(column_name)
+        if target_type:
+            df = df.withColumn(
+                column_name,
+                F.expr(
+                    f"try_cast(trim(cast({quoted_name} AS STRING)) AS {target_type})"
+                ),
+            )
+        elif isinstance(field.dataType, StringType):
+            df = df.withColumn(column_name, F.trim(F.col(quoted_name)))
+    return df
 
 
 def latest_file_rows(table_name: str):
@@ -29,16 +69,17 @@ def discover_source_files():
     """Discover source file directories in the UC volume."""
     source_dir = f"{VOLUME_ROOT}/{BLS_TIMESERIES}"
     items = dbutils.fs.ls(source_dir)
-    return sorted(
+    bls_files = sorted(
         item.name.rstrip("/")
         for item in items
         if item.name.endswith("/") and item.name.rstrip("/") not in NON_TABULAR_FILES
     )
+    return [*bls_files, POPULATION_SOURCE_FILE]
 
 
 def bronze_table_name(source_file):
     """pr.data.0.Current -> pr_data_0_current"""
-    return source_file.replace(".", "_").lower()
+    return source_file.removesuffix(".json").replace(".", "_").lower()
 
 
 # One silver materialized view per discovered source file, keeping only rows
@@ -54,4 +95,4 @@ for source_file in discover_source_files():
         ),
     )
     def build(t=table_name):
-        return latest_file_rows(t)
+        return apply_silver_types(latest_file_rows(t))

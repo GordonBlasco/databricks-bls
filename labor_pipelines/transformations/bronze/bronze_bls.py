@@ -6,6 +6,8 @@ RAW_SCHEMA = "raw"
 LANDING_VOLUME = "landing_zone"
 VOLUME_ROOT = f"/Volumes/{CATALOG}/{RAW_SCHEMA}/{LANDING_VOLUME}/raw"
 BLS_TIMESERIES = "bls/pr/"
+DATAUSA_SOURCE = "datausa"
+POPULATION_SOURCE_FILE = "population.json"
 
 BRONZE_CATALOG = "labor_stats"
 BRONZE_SCHEMA = "bronze"
@@ -18,43 +20,56 @@ def discover_source_files():
     """Discover source file directories in the UC volume."""
     source_dir = f"{VOLUME_ROOT}/{BLS_TIMESERIES}"
     items = dbutils.fs.ls(source_dir)
-    return sorted(
+    bls_files = sorted(
         item.name.rstrip("/")
         for item in items
         if item.name.endswith("/") and item.name.rstrip("/") not in NON_TABULAR_FILES
     )
+    return [*bls_files, POPULATION_SOURCE_FILE]
 
 
 def bronze_table_name(source_file):
     """pr.data.0.Current -> pr_data_0_current"""
-    return source_file.replace(".", "_").lower()
+    return source_file.removesuffix(".json").replace(".", "_").lower()
 
 
-# One bronze streaming table per source file. Auto Loader picks up new file
-# versions (content-addressed .txt files) incrementally; SDP manages
+def source_config(source_file):
+    """Return the Auto Loader path and options for a discovered source."""
+    if source_file == POPULATION_SOURCE_FILE:
+        return (
+            f"{VOLUME_ROOT}/{DATAUSA_SOURCE}/{source_file}/",
+            {"cloudFiles.format": "json", "multiLine": "true"},
+        )
+
+    return (
+        f"{VOLUME_ROOT}/{BLS_TIMESERIES}{source_file}/",
+        {"cloudFiles.format": "csv", "sep": "\t", "header": "true"},
+    )
+
+
+# One bronze streaming table per source file. Auto Loader picks up new
+# content-addressed .txt and .json versions incrementally; SDP manages
 # checkpoints and schema location automatically.
 for source_file in discover_source_files():
     table_name = bronze_table_name(source_file)
 
     @dp.table(
         name=f"{BRONZE_CATALOG}.{BRONZE_SCHEMA}.{table_name}",
-        comment=f"Bronze layer: raw ingestion of {source_file} from BLS via Auto Loader.",
+        comment=f"Bronze layer: raw ingestion of {source_file} via Auto Loader.",
     )
     def bronze(sf=source_file):
-        raw = (
-            spark.readStream.format("cloudFiles")
-            .option("cloudFiles.format", "csv")
-            .option("sep", "\t")
-            .option("header", "true")
-            .load(f"{VOLUME_ROOT}/{BLS_TIMESERIES}{sf}/")
-        )
+        source_path, options = source_config(sf)
+        reader = spark.readStream.format("cloudFiles")
+        for key, value in options.items():
+            reader = reader.option(key, value)
+        raw = reader.load(source_path)
 
         # BLS pads header names with whitespace ("value   "); data values are left as-is.
         # All source columns stay strings; trimming and typing happen in silver.
         return raw.select(
             *[F.col(f"`{c}`").alias(c.strip()) for c in raw.columns],
             F.col("_metadata.file_path").alias("_volume_path"),
-            F.regexp_replace(F.col("_metadata.file_name"), r"\.txt$", "").alias("_content_hash"),
+            F.regexp_replace(F.col("_metadata.file_name"), r"\.(txt|json)$", "").alias("_content_hash"),
             F.col("_metadata.file_modification_time").alias("_file_modified_at"),
             F.current_timestamp().alias("_ingested_at"),
         )

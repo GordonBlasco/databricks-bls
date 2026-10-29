@@ -199,3 +199,12 @@ for source, file_name, url in sources:
 )
 
 display(spark.table(MANIFEST_TABLE).where(F.col("run_id") == RUN_ID))
+
+failed_sources = sorted(
+    row["source_file"] for row in results if row["status"] == "failed"
+)
+if failed_sources:
+    raise RuntimeError(
+        "Ingestion manifest was saved, but one or more downloads failed: "
+        + ", ".join(failed_sources)
+    )

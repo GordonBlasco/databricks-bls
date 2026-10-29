@@ -54,6 +54,29 @@ SILVER_COLUMN_TYPES = {
     "population": "BIGINT",
 }
 
+# Typed silver columns consumed by gold. apply_silver_types uses try_cast so bad
+# source values become NULL; silver expectations fail when any of those NULLs
+# reach a published silver table.
+GOLD_CAST_COLUMNS = {
+    "pr.data.1.AllData": ("year", "value"),
+    POPULATION_SOURCE_FILE: ("year", "population"),
+}
+
+# Business keys that must be present on every Silver row.
+KEY_COLUMNS = {
+    "pr.class": ("class_code",),
+    "pr.data.0.Current": ("series_id", "year", "period"),
+    "pr.data.1.AllData": ("series_id", "year", "period"),
+    "pr.duration": ("duration_code",),
+    "pr.footnote": ("footnote_code",),
+    "pr.measure": ("measure_code",),
+    "pr.period": ("period",),
+    "pr.seasonal": ("seasonal_code",),
+    "pr.sector": ("sector_code",),
+    "pr.series": ("series_id",),
+    POPULATION_SOURCE_FILE: ("nation_id", "year"),
+}
+
 
 def quote_identifier(name: str) -> str:
     """Quote a Spark column name, including names such as 'ID Year'."""
@@ -121,6 +144,25 @@ def bronze_table_name(source_file):
     return source_file.removesuffix(".json").replace(".", "_").lower()
 
 
+def silver_row_expectations(source_file):
+    expectations = {
+        "ingestion_timestamp_present": "_ingested_at IS NOT NULL",
+    }
+    expectations.update(
+        {
+            f"{column}_key_not_null": f"{quote_identifier(column)} IS NOT NULL"
+            for column in KEY_COLUMNS.get(source_file, ())
+        }
+    )
+    expectations.update(
+        {
+            f"{column}_cast_valid": f"{quote_identifier(column)} IS NOT NULL"
+            for column in GOLD_CAST_COLUMNS.get(source_file, ())
+        }
+    )
+    return expectations
+
+
 # One silver materialized view per discovered source file, keeping only rows
 # from the latest file version in the corresponding bronze streaming table.
 for source_file in discover_source_files():
@@ -133,6 +175,7 @@ for source_file in discover_source_files():
             f"in {BRONZE_CATALOG}.{BRONZE_SCHEMA}.{table_name}."
         ),
     )
+    @dp.expect_all_or_fail(silver_row_expectations(source_file))
     def build(t=table_name, sf=source_file):
         latest = latest_file_rows(t)
         if sf == POPULATION_SOURCE_FILE:

@@ -1,8 +1,9 @@
 # BLS Labor Stats Pipeline - Declarative Automation Bundle
 #
 # Defines the full pipeline as infrastructure-as-code:
-#   1. SDP pipeline (bronze streaming tables + silver materialized views)
-#   2. Lakeflow Job that chains: ingestion notebook -> SDP pipeline update
+#   1. Idempotent Unity Catalog setup
+#   2. Raw-file ingestion into a managed Volume
+#   3. SDP pipeline (bronze streaming tables + silver and gold materialized views)
 #
 # Deploy:    databricks bundle deploy
 # Validate:  databricks bundle validate
@@ -22,26 +23,44 @@ resources:
       serverless: true
       development: false
       continuous: false
+      root_path: ./src/labor_pipelines
       libraries:
         - glob:
-            include: ./labor_pipelines/transformations/**
+            include: ./src/labor_pipelines/transformations/**
 
   jobs:
     bls_ingest_and_process:
       name: BLS Labor Stats - Ingest and Process
+      performance_target: STANDARD
+      tags:
+        aidevkit_project: ai-dev-kit
       tasks:
-        # Task 1: Download raw BLS files into the UC volume
-        - task_key: ingestion
+        # Task 1: Create the catalog, schemas, and managed Volume when absent.
+        - task_key: setup
           notebook_task:
-            notebook_path: ./01_ingestion.py
+            notebook_path: ./src/00_setup.py
 
-        # Task 2: Run the SDP pipeline (bronze streaming tables + silver MVs)
-        # Only runs after ingestion completes successfully
-        - task_key: bronze_silver
+        # Task 2: Download raw BLS files into the UC Volume.
+        - task_key: ingestion
+          depends_on:
+            - task_key: setup
+          notebook_task:
+            notebook_path: ./src/01_ingestion.py
+          environment_key: default
+
+        # Task 3: Run the SDP pipeline after ingestion completes successfully.
+        - task_key: bronze_silver_gold
           depends_on:
             - task_key: ingestion
           pipeline_task:
             pipeline_id: ${resources.pipelines.bls_pipeline.id}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+            dependencies:
+              - "-r ${workspace.file_path}/requirements.txt"
 
 targets:
   prod:
